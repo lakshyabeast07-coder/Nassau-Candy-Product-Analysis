@@ -54,24 +54,27 @@ def load_data():
     # ── Profitability metrics (pre-computed) ───────────────────
     pm = pd.read_excel(FILE, sheet_name="Profitability Metrics", header=3)
     pm.columns = [c.strip() for c in pm.columns]
-    pm = pm.dropna(subset=["Product ID"]).copy()
+    # Drop rows where Product ID is NaN or is the literal header string
+    pm = pm[pd.to_numeric(pm["Gross Margin (%)"], errors="coerce").notna()].copy()
+    pm["Gross Margin (%)"] = pd.to_numeric(pm["Gross Margin (%)"], errors="coerce")
     pm["Gross Margin (%)"] = (pm["Gross Margin (%)"] * 100).round(2)
 
     # ── Product-level analysis ────────────────────────────────
     pl_raw = pd.read_excel(FILE, sheet_name="Product-Level Analysis", header=None)
-    # Ranked-by-profit table starts at row 8 (0-indexed), ends at ~row 23
     pl_cols = ["Rank", "Tier", "Product Name", "Total Revenue ($)",
                "Total Gross Profit ($)", "Gross Margin (%)", "Profit per Unit ($)",
                "Units Sold", "Category"]
     pl = pl_raw.iloc[8:23, :9].copy()
     pl.columns = pl_cols
+    # Keep only rows where Rank is a real number (drops stray header rows)
+    pl["Rank"] = pd.to_numeric(pl["Rank"], errors="coerce")
     pl = pl.dropna(subset=["Rank"]).copy()
+    for col in ["Total Revenue ($)", "Total Gross Profit ($)", "Gross Margin (%)",
+                "Profit per Unit ($)", "Units Sold"]:
+        pl[col] = pd.to_numeric(pl[col], errors="coerce")
     pl["Gross Margin (%)"]    = (pl["Gross Margin (%)"] * 100).round(2)
-    pl["Total Revenue ($)"]   = pd.to_numeric(pl["Total Revenue ($)"],   errors="coerce")
-    pl["Total Gross Profit ($)"] = pd.to_numeric(pl["Total Gross Profit ($)"], errors="coerce")
-    pl["Rank"]                = pd.to_numeric(pl["Rank"], errors="coerce").astype("Int64")
-    pl["Units Sold"]          = pd.to_numeric(pl["Units Sold"], errors="coerce").astype("Int64")
-    pl["Profit per Unit ($)"] = pd.to_numeric(pl["Profit per Unit ($)"], errors="coerce")
+    pl["Rank"]                = pl["Rank"].astype("Int64")
+    pl["Units Sold"]          = pl["Units Sold"].astype("Int64")
 
     # ── Division performance ───────────────────────────────────
     dp_raw = pd.read_excel(FILE, sheet_name="Division Performance", header=None)
@@ -80,10 +83,13 @@ def load_data():
                "Revenue Share (%)", "Profit Share (%)", "Profit per Unit ($)"]
     dp = dp_raw.iloc[4:9, :11].copy()
     dp.columns = dp_cols
-    dp = dp[dp["Division"].notna() & ~dp["Division"].astype(str).str.startswith("TOTAL")].copy()
+    # Drop header echo rows and TOTAL row
+    dp = dp[dp["Division"].notna()].copy()
+    dp = dp[~dp["Division"].astype(str).str.contains("Division|TOTAL", na=False)].copy()
     dp["Division"] = dp["Division"].astype(str).str.replace(r"^[^\w]+", "", regex=True).str.strip()
     for col in dp.columns[1:]:
         dp[col] = pd.to_numeric(dp[col], errors="coerce")
+    dp = dp.dropna(subset=["Gross Margin (%)"]).copy()
     dp["Gross Margin (%)"]   = (dp["Gross Margin (%)"]   * 100).round(2)
     dp["Revenue Share (%)"]  = (dp["Revenue Share (%)"]  * 100).round(2)
     dp["Profit Share (%)"]   = (dp["Profit Share (%)"]   * 100).round(2)
@@ -94,22 +100,25 @@ def load_data():
                         "Imbalance Signal", "Revenue ($)", "Gross Profit ($)",
                         "Revenue-Profit Gap ($)", "Interpretation"]
     imb = imb_raw[imb_raw["Division"].notna()].copy()
+    imb = imb[~imb["Division"].astype(str).str.contains("Division", na=False)].copy()
     imb["Division"] = imb["Division"].astype(str).str.replace(r"^[^\w]+", "", regex=True).str.strip()
     for col in ["Revenue Share (%)", "Profit Share (%)", "Imbalance (pp)",
                 "Revenue ($)", "Gross Profit ($)", "Revenue-Profit Gap ($)"]:
         imb[col] = pd.to_numeric(imb[col], errors="coerce")
+    imb = imb.dropna(subset=["Revenue Share (%)"]).copy()
     imb["Revenue Share (%)"] = (imb["Revenue Share (%)"] * 100).round(2)
     imb["Profit Share (%)"]  = (imb["Profit Share (%)"]  * 100).round(2)
 
     # ── Pareto & cost diagnostics ─────────────────────────────
     pc_raw = pd.read_excel(FILE, sheet_name="Pareto & Cost Diagnostics", header=None)
-    # Pareto table rows 4-20
     pareto_cols = ["Rank", "Product Name", "Division", "Revenue ($)", "Rev Share (%)",
                    "Cum Rev (%)", "80% Line", "Gross Profit ($)", "Prof Share (%)",
                    "Cum Prof (%)", "Gross Margin (%)", "Pareto Category"]
     pareto = pc_raw.iloc[4:20, :12].copy()
     pareto.columns = pareto_cols
-    pareto = pareto[pareto["Rank"].notna() & (pareto["Rank"] != "PORTFOLIO TOTAL")].copy()
+    # Keep only numeric-rank rows (drops header echo and PORTFOLIO TOTAL)
+    pareto["Rank"] = pd.to_numeric(pareto["Rank"], errors="coerce")
+    pareto = pareto.dropna(subset=["Rank"]).copy()
     for col in ["Revenue ($)", "Rev Share (%)", "Cum Rev (%)", "Gross Profit ($)",
                 "Prof Share (%)", "Cum Prof (%)", "Gross Margin (%)"]:
         pareto[col] = pd.to_numeric(pareto[col], errors="coerce")
@@ -125,10 +134,13 @@ def load_data():
                  "Cost/Unit ($)", "Diagnosis", "Action Flag"]
     cost_diag = pc_raw.iloc[47:63, :12].copy()
     cost_diag.columns = cost_cols
+    # Keep only rows with a real product name and numeric cost ratio
     cost_diag = cost_diag[cost_diag["Product Name"].notna()].copy()
+    cost_diag = cost_diag[~cost_diag["Product Name"].astype(str).str.contains("Product Name|#", na=False)].copy()
     for col in ["Revenue ($)", "Total Cost ($)", "Cost Ratio (%)",
                 "Gross Profit ($)", "Margin (%)", "Profit/Unit ($)", "Cost/Unit ($)"]:
         cost_diag[col] = pd.to_numeric(cost_diag[col], errors="coerce")
+    cost_diag = cost_diag.dropna(subset=["Cost Ratio (%)"]).copy()
     cost_diag["Cost Ratio (%)"] = (cost_diag["Cost Ratio (%)"] * 100).round(2)
     cost_diag["Margin (%)"]     = (cost_diag["Margin (%)"]     * 100).round(2)
 
@@ -1035,4 +1047,3 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
